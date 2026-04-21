@@ -135,6 +135,16 @@ class DataEnrichmentPipeline:
         """
         Ajoute les variables de retard (quantités des jours précédents).
 
+        Pourquoi des lag features ?
+        ----------------------------
+        Un modèle de prévision a besoin de savoir ce qui s'est passé avant.
+        Si l'article 3 a eu 50 commandes lundi, il est probable qu'il en aura
+        aussi mardi (inertie). En ajoutant "quantity_lag_1" (quantité d'hier)
+        comme variable d'entrée, on permet au modèle d'exploiter cette inertie.
+
+        Le lag-7 capture la saisonnalité hebdomadaire : la quantité du même
+        jour de la semaine précédente est souvent un bon prédicteur.
+
         Args:
             lag_days: Liste des décalages en jours (par défaut [1] = jour précédent)
 
@@ -146,26 +156,29 @@ class DataEnrichmentPipeline:
         if self.enriched_data is None:
             raise ValueError("Les données doivent être enrichies d'abord")
 
-        # Tri des données par article et par date
+        # Le tri par article puis par date est OBLIGATOIRE avant d'appliquer shift().
+        # Sans tri, shift(1) décalerait sur la ligne précédente du DataFrame, qui
+        # pourrait appartenir à un article différent — résultat incohérent.
         self.enriched_data = self.enriched_data.sort_values([
             ColumnNames.ARTICLE_ID,
             ColumnNames.DATE
         ]).reset_index(drop=True)
 
-        # Ajout des colonnes de retard pour chaque article
         for lag in lag_days:
             col_name = f"{ColumnNames.QUANTITY}_lag_{lag}"
 
-            # Calcul du lag par groupe d'article
+            # groupby() garantit que le décalage (shift) reste à l'intérieur
+            # de chaque groupe d'article et ne franchit pas la frontière
+            # entre deux articles consécutifs dans le DataFrame.
             self.enriched_data[col_name] = (
                 self.enriched_data
                 .groupby(ColumnNames.ARTICLE_ID)[ColumnNames.QUANTITY]
                 .shift(lag)
-                .fillna(0)  # Première valeur = 0 car pas de valeur précédente
+                .fillna(0)  # Les N premières lignes de chaque article n'ont pas d'historique → 0
                 .astype(int)
             )
 
-        # Ajout de la colonne demandée dans le cahier des charges
+        # Alias lisible pour quantity_lag_1 (exigence du cahier des charges)
         if 1 in lag_days:
             self.enriched_data[ColumnNames.QUANTITY_PREV_DAY] = self.enriched_data[f"{ColumnNames.QUANTITY}_lag_1"]
 
@@ -176,6 +189,17 @@ class DataEnrichmentPipeline:
     def add_rolling_features(self, windows: List[int] = [7, 30]) -> pd.DataFrame:
         """
         Ajoute des moyennes mobiles sur différentes fenêtres.
+
+        Pourquoi des moyennes mobiles ?
+        ---------------------------------
+        Une moyenne mobile lisse les pics isolés (ex: grosse commande exceptionnelle)
+        et révèle la tendance sous-jacente. La fenêtre à 7 jours capture les
+        variations hebdomadaires, tandis que la fenêtre à 30 jours capture la
+        tendance mensuelle (utile pour détecter une croissance ou une baisse durable).
+
+        Ces features permettent à un modèle ML de savoir si l'article est "en hausse"
+        ou "en baisse" sur les dernières semaines, sans se laisser piéger par
+        une valeur aberrante ponctuelle.
 
         Args:
             windows: Liste des fenêtres (en jours) pour les moyennes mobiles
@@ -191,7 +215,9 @@ class DataEnrichmentPipeline:
         for window in windows:
             col_name = f"{ColumnNames.QUANTITY}_rolling_mean_{window}d"
 
-            # Calcul de la moyenne mobile par article
+            # transform() applique la fonction à chaque groupe séparément mais
+            # retourne un Series alignée sur le DataFrame original, ce qui permet
+            # l'assignation directe. min_periods=1 évite les NaN au début de série.
             self.enriched_data[col_name] = (
                 self.enriched_data
                 .groupby(ColumnNames.ARTICLE_ID)[ColumnNames.QUANTITY]
@@ -286,12 +312,17 @@ class DataEnrichmentPipeline:
                     self.enriched_data[ColumnNames.DAY] <= 20)
         self.enriched_data['is_month_end'] = self.enriched_data[ColumnNames.DAY] > 25
 
-        # Variables cycliques (pour capturer la périodicité)
-        # Jour de l'année en sin/cos pour capturer la saisonnalité annuelle
+        # Encodage cyclique sin/cos — pourquoi pas juste le numéro du jour ?
+        # ---------------------------------------------------------------
+        # Si on donne le jour de l'année (1–365) comme entier à un modèle,
+        # il voit une grande distance entre le 1er janvier (1) et le 31 décembre
+        # (365), alors que ces deux jours sont en réalité consécutifs.
+        # L'encodage sin/cos projette la variable sur un cercle unitaire :
+        # le jour 1 et le jour 365 sont proches sur ce cercle.
+        # Même logique pour les jours de semaine (0=Lundi, 6=Dimanche → voisins).
         self.enriched_data['day_of_year_sin'] = np.sin(2 * np.pi * self.enriched_data['day_of_year'] / 365.25)
         self.enriched_data['day_of_year_cos'] = np.cos(2 * np.pi * self.enriched_data['day_of_year'] / 365.25)
 
-        # Jour de la semaine en sin/cos pour capturer la périodicité hebdomadaire
         self.enriched_data['weekday_sin'] = np.sin(2 * np.pi * self.enriched_data[ColumnNames.WEEKDAY] / 7)
         self.enriched_data['weekday_cos'] = np.cos(2 * np.pi * self.enriched_data[ColumnNames.WEEKDAY] / 7)
 
