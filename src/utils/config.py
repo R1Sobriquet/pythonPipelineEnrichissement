@@ -250,6 +250,56 @@ def print_data_source_info():
     print("=" * 60)
 
 
+def validate_config() -> None:
+    """
+    Vérifie que la configuration minimale est présente et cohérente.
+
+    Appelée au démarrage de l'application GUI pour détecter tôt les
+    problèmes de configuration et afficher un message d'erreur clair
+    plutôt que de laisser le pipeline échouer silencieusement.
+
+    Raises:
+        ValueError: Si un paramètre obligatoire est manquant ou invalide.
+            Le message d'erreur indique précisément ce qui manque et
+            comment y remédier.
+    """
+    source = DataSourceConfig.DEFAULT_SOURCE
+
+    # La valeur de DATA_SOURCE doit être l'une des deux options acceptées
+    if source not in ("csv", "sqlserver"):
+        raise ValueError(
+            f"DATA_SOURCE='{source}' est invalide. "
+            "Valeurs acceptées : 'csv' ou 'sqlserver'."
+        )
+
+    if source == "sqlserver":
+        # En mode SQL Server, le mot de passe est obligatoire
+        if not DataSourceConfig.DB_PASSWORD:
+            raise ValueError(
+                "DB_PASSWORD est vide dans le fichier .env.\n"
+                "Renseignez votre mot de passe SQL Server pour utiliser DATA_SOURCE=sqlserver."
+            )
+        # Le serveur doit être non-vide
+        if not DataSourceConfig.DB_SERVER:
+            raise ValueError(
+                "DB_SERVER est vide dans le fichier .env.\n"
+                "Indiquez l'adresse IP ou le nom du serveur SQL Server."
+            )
+
+    # En mode CSV, on vérifie que le fichier source existe
+    if source == "csv":
+        csv_path = Path(DataSourceConfig.CSV_FILE_PATH)
+        # On ne lève pas d'erreur si absent : l'utilisateur peut le choisir
+        # via la GUI. On émet juste un avertissement dans le logger.
+        import logging
+        _logger = logging.getLogger(__name__)
+        if not csv_path.exists():
+            _logger.warning(
+                f"Le fichier CSV par défaut est introuvable : {csv_path}. "
+                "Sélectionnez-en un via l'interface."
+            )
+
+
 # Test du module si exécuté directement
 if __name__ == "__main__":
     print("🧪 Test de la configuration")
@@ -260,3 +310,10 @@ if __name__ == "__main__":
         print(f"   {file_type}: {get_file_path(file_type)}")
 
     print("\n✅ Configuration chargée avec succès")
+
+    print("\n🔍 Validation de la configuration :")
+    try:
+        validate_config()
+        print("   ✅ Configuration valide")
+    except ValueError as e:
+        print(f"   ❌ {e}")
