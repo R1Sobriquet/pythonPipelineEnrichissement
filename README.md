@@ -123,9 +123,9 @@ Copiez `.env.example` en `.env` et renseignez les valeurs.
 DATA_SOURCE=csv
 
 # ---- SQL Server (ignoré si DATA_SOURCE=csv) ----
-DB_SERVER=10.147.18.196
-DB_NAME=Python
-DB_USER=sa
+DB_SERVER=10.147.xx.xxx
+DB_NAME=votre_database
+DB_USER=votre_utilisateur
 DB_PASSWORD=votre_mot_de_passe
 DB_DRIVER=ODBC Driver 17 for SQL Server
 DB_TIMEOUT=30
